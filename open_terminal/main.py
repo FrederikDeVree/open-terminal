@@ -488,7 +488,7 @@ def _truncation_note(s: int, e: int, total: int) -> str:
     operation_id="read_file",
     summary="Read a file",
     description=(
-        "Read a file and return its contents. Supports text files and images (PNG, JPEG, WebP, etc.). "
+        "Read a file and return its contents. Supports text files (PDFs, Excel, Word, code, Markdown, etc) and images (PNG, JPEG, WebP, etc.). "
         "Images are returned as binary so you can view and analyze them directly. "
         "Use display_file to show a file to the user.\n\n"
         f"**Important:** By default only the last {_READ_FILE_DEFAULT_LAST_LINES} lines are returned. "
