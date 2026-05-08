@@ -464,11 +464,21 @@ async def list_files(
     return {"dir": target, "entries": entries}
 
 
+_READ_FILE_DEFAULT_LAST_LINES = 500
+
 @app.get(
     "/files/read",
     operation_id="read_file",
     summary="Read a file",
-    description="Read a file and return its contents. Supports text files and images (PNG, JPEG, WebP, etc.). For text files you can optionally request a specific line range. Images are returned as binary so you can view and analyze them directly. Use display_file to show a file to the user.",
+    description=(
+        "Read a file and return its contents. Supports text files and images (PNG, JPEG, WebP, etc.). "
+        "Images are returned as binary so you can view and analyze them directly. "
+        "Use display_file to show a file to the user.\n\n"
+        f"**Important:** By default only the last {_READ_FILE_DEFAULT_LAST_LINES} lines are returned. "
+        "Large files must be read in chunks using `start_line`/`end_line` or `last_lines`. "
+        "Always check `total_lines` and `returned_lines` in the response — if they differ, "
+        "the file was truncated and you must request additional ranges to read the rest."
+    ),
     dependencies=[Depends(verify_api_key)],
     responses={
         404: {"description": "File not found."},
@@ -480,10 +490,32 @@ async def read_file(
     http_request: Request,
     path: str = Query(..., description="Path to the file to read."),
     start_line: Optional[int] = Query(
-        None, description="First line to return (1-indexed, inclusive). Defaults to the beginning of the file.", ge=1
+        None,
+        description=(
+            "First line to include, 1-indexed inclusive. "
+            "Use together with end_line to read a specific range, e.g. start_line=1&end_line=100 for the first 100 lines. "
+            "When set, overrides the default last-500-lines behaviour."
+        ),
+        ge=1,
     ),
     end_line: Optional[int] = Query(
-        None, description="Last line to return (1-indexed, inclusive). Defaults to the end of the file.", ge=1
+        None,
+        description=(
+            "Last line to include, 1-indexed inclusive. "
+            "Use together with start_line to read a specific range, e.g. start_line=101&end_line=200 for lines 101-200. "
+            "When set, overrides the default last-500-lines behaviour."
+        ),
+        ge=1,
+    ),
+    last_lines: Optional[int] = Query(
+        None,
+        description=(
+            "Return only the last N lines of the file. "
+            "Useful for tailing log files or checking the end of a file. "
+            f"Defaults to {_READ_FILE_DEFAULT_LAST_LINES} when neither start_line nor end_line are set. "
+            "Set to a larger value or use start_line/end_line if you need more content."
+        ),
+        ge=1,
     ),
     fs: UserFS = Depends(get_filesystem),
 ):
@@ -492,6 +524,18 @@ async def read_file(
     target = fs.resolve_path(path, cwd=session_cwd)
     if not await fs.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
+
+    def _apply_range(lines: list) -> tuple[list, int, int]:
+        """Return (slice, start_idx, end_idx) based on request parameters."""
+        total = len(lines)
+        if start_line is not None or end_line is not None:
+            s = (start_line or 1) - 1
+            e = end_line or total
+        else:
+            n = last_lines if last_lines is not None else _READ_FILE_DEFAULT_LAST_LINES
+            s = max(0, total - n)
+            e = total
+        return lines[s:e], s, e
 
     try:
         content = await fs.read_text(target)
@@ -512,13 +556,19 @@ async def read_file(
             ):
                 text = await asyncio.to_thread(extractor, target)
                 lines = text.splitlines(keepends=True)
-                start = (start_line or 1) - 1
-                end = end_line or len(lines)
-                return {
+                sliced, s, e = _apply_range(lines)
+                result = {
                     "path": target,
                     "total_lines": len(lines),
-                    "content": "".join(lines[start:end]),
+                    "returned_lines": len(sliced),
+                    "content": "".join(sliced),
                 }
+                if len(sliced) < len(lines):
+                    result["note"] = (
+                        f"Showing lines {s + 1}-{e} of {len(lines)}. "
+                        "Use start_line/end_line or last_lines to read other parts."
+                    )
+                return result
 
         # Return raw binary for allowed mime type prefixes (e.g. image/*)
         if any(mime.startswith(prefix) for prefix in BINARY_FILE_MIME_PREFIXES):
@@ -530,13 +580,19 @@ async def read_file(
             detail=f"Unsupported binary file type: {mime} ({len(raw)} bytes)",
         )
 
-    start = (start_line or 1) - 1
-    end = end_line or len(lines)
-    return {
+    sliced, s, e = _apply_range(lines)
+    result = {
         "path": target,
         "total_lines": len(lines),
-        "content": "".join(lines[start:end]),
+        "returned_lines": len(sliced),
+        "content": "".join(sliced),
     }
+    if len(sliced) < len(lines):
+        result["note"] = (
+            f"Showing lines {s + 1}–{e} of {len(lines)}. "
+            "Use start_line/end_line or last_lines to read other parts."
+        )
+    return result
 
 
 @app.get(
