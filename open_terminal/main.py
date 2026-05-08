@@ -443,7 +443,7 @@ async def set_cwd(
     "/files/list",
     operation_id="list_files",
     summary="List directory contents",
-    description="Return a structured listing of files and directories at the given path.",
+    description="Return a structured listing of files and directories at the given path. Pass show_hidden=true to include dot files.",
     dependencies=[Depends(verify_api_key)],
     responses={
         404: {"description": "Directory not found."},
@@ -453,6 +453,7 @@ async def set_cwd(
 async def list_files(
     http_request: Request,
     directory: str = Query(".", description="Directory path to list."),
+    show_hidden: bool = Query(False, description="Include hidden files and directories (those starting with a dot)."),
     fs: UserFS = Depends(get_filesystem),
 ):
     session_id = http_request.headers.get("x-session-id")
@@ -461,6 +462,8 @@ async def list_files(
     if not await fs.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
     entries = await fs.listdir(target)
+    if not show_hidden:
+        entries = [e for e in entries if not e["name"].startswith(".")]
     return {"dir": target, "entries": entries}
 
 
