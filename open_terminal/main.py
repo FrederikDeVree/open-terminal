@@ -466,6 +466,20 @@ async def list_files(
 
 _READ_FILE_DEFAULT_LAST_LINES = 500
 
+def _truncation_note(s: int, e: int, total: int) -> str:
+    """Build a navigation hint when a file was returned partially.
+
+    s/e are 0-based start/end indices of the slice that was returned.
+    """
+    parts = [f"Showing lines {s + 1}-{e} of {total}."]
+    if s > 0:
+        prev_end = s
+        prev_start = max(1, s - (e - s))
+        parts.append(f"To read the preceding chunk use start_line={prev_start}&end_line={prev_end}.")
+    if e < total:
+        parts.append(f"To read the next chunk use start_line={e + 1}&end_line={min(total, e + (e - s))}.")
+    return " ".join(parts)
+
 @app.get(
     "/files/read",
     operation_id="read_file",
@@ -564,10 +578,7 @@ async def read_file(
                     "content": "".join(sliced),
                 }
                 if len(sliced) < len(lines):
-                    result["note"] = (
-                        f"Showing lines {s + 1}-{e} of {len(lines)}. "
-                        "Use start_line/end_line or last_lines to read other parts."
-                    )
+                    result["note"] = _truncation_note(s, e, len(lines))
                 return result
 
         # Return raw binary for allowed mime type prefixes (e.g. image/*)
@@ -588,10 +599,7 @@ async def read_file(
         "content": "".join(sliced),
     }
     if len(sliced) < len(lines):
-        result["note"] = (
-            f"Showing lines {s + 1}–{e} of {len(lines)}. "
-            "Use start_line/end_line or last_lines to read other parts."
-        )
+        result["note"] = _truncation_note(s, e, len(lines))
     return result
 
 
