@@ -463,7 +463,7 @@ async def list_files(
         raise HTTPException(status_code=404, detail="Directory not found")
     entries = await fs.listdir(target)
     if not show_hidden:
-        entries = [e for e in entries if not e["name"].startswith(".")]
+        entries = [e for e in entries if not e["name"].startswith(".") and e["name"] != "__pycache__"]
     return {"dir": target, "entries": entries}
 
 
