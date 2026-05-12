@@ -1058,34 +1058,51 @@ async def glob_search(
     "/files/upload",
     include_in_schema=False,
     operation_id="upload_file",
-    summary="Upload a file",
-    description="Save a file to the specified path via multipart form data.",
+    summary="Upload a file or folder",
+    description="Save one or more files to the specified directory via multipart form data. When uploading a folder, each file's relative path (as set by the browser via webkitdirectory) is preserved under the destination directory.",
     dependencies=[Depends(verify_api_key)],
     responses={
         401: {"description": "Invalid or missing API key."},
     },
 )
 async def upload_file(
-    directory: str = Query(..., description="Destination directory for the file."),
-    file: UploadFile = File(
-        ..., description="The file to upload."
+    directory: str = Query(..., description="Destination directory for the uploaded file(s)."),
+    files: list[UploadFile] = File(
+        ..., description="One or more files to upload. When uploading a folder, include relative paths in each file's filename field."
     ),
     fs: UserFS = Depends(get_filesystem),
 ):
-    content = await file.read()
-    filename = os.path.basename(file.filename or "upload")
-
     directory = fs.resolve_path(directory)
-    path = os.path.normpath(os.path.join(directory, filename))
+    uploaded = []
+    for file in files:
+        content = await file.read()
 
-    try:
-        await fs.mkdir(directory)
-        await fs.write_bytes(path, content)
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-    except OSError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"path": path, "size": len(content)}
+        # Preserve relative sub-paths (set by browsers for folder uploads) while
+        # preventing path traversal by stripping leading separators and ".." parts.
+        raw_name = file.filename or "upload"
+        # Normalise separators, then strip any leading / or .. components
+        safe_parts = [
+            p for p in raw_name.replace("\\", "/").split("/")
+            if p and p != ".."
+        ]
+        relative = os.path.join(*safe_parts) if safe_parts else "upload"
+
+        path = os.path.normpath(os.path.join(directory, relative))
+        # Final guard: ensure the resolved path stays within the destination directory
+        if not path.startswith(directory + os.sep) and path != directory:
+            raise HTTPException(status_code=400, detail=f"Invalid file path: {raw_name}")
+
+        try:
+            await fs.mkdir(os.path.dirname(path))
+            await fs.write_bytes(path, content)
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e))
+        except OSError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        uploaded.append({"path": path, "size": len(content)})
+
+    return {"files": uploaded}
 
 
 class ArchiveRequest(BaseModel):
